@@ -26,6 +26,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import webbrowser
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,38 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ── Neutralize the browser for CHILD processes too ──────────────────────────
+# `hermes_cli/auth.py` calls `webbrowser.open()` on the OAuth login paths (xAI
+# loopback, Spotify, the device-code flows). The `_neutralize_webbrowser`
+# fixture further down covers that, but a monkeypatch only binds inside the
+# process that applied it, and this suite does not stay in one process:
+#
+#   * `scripts/run_tests_parallel.py` spawns a fresh `python -m pytest <file>`
+#     per test file, and
+#   * individual tests shell out to the `hermes` CLI.
+#
+# An escaped call is not a harmless no-op. On macOS `webbrowser` shells out to
+# `osascript`, which opens a REAL consent page in the developer's browser:
+# a local run of `tests/hermes_cli` put a burst of live xAI "Authorize Grok
+# Build" tabs in front of the operator, one pair per run.
+#
+# `$BROWSER` is the one hook every child process inherits for free, so setting
+# it here closes the hole the fixture structurally cannot reach. `true` exits 0
+# without printing or opening anything, so `webbrowser.open()` still returns
+# True and callers that branch on that keep their behavior. It is also absent
+# from `auth._CONSOLE_BROWSER_NAMES`, so `_can_open_graphical_browser()` stays
+# on its normal path instead of taking the console-browser refusal branch.
+#
+# Tests that exercise browser detection itself (`test_graphical_browser_
+# detection.py`) `delenv` this and set their own value, which monkeypatch
+# restores afterwards.
+NO_OP_BROWSER = "true"
+os.environ["BROWSER"] = NO_OP_BROWSER
+webbrowser.register(
+    NO_OP_BROWSER, None, webbrowser.GenericBrowser(NO_OP_BROWSER), preferred=True
+)
 
 
 # ── Sandbox HERMES_HOME before ANY test module is imported ──────────────────
