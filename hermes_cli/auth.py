@@ -2427,6 +2427,18 @@ def _codex_access_token_is_expiring(access_token: Any, skew_seconds: int) -> boo
 
 
 def _qwen_cli_auth_path() -> Path:
+    """Return the Qwen CLI credential file.
+
+    ``HERMES_QWEN_CLI_AUTH_PATH`` overrides the location, for tests and for
+    unusual deployments that keep the Qwen CLI state somewhere else. The
+    default is the path the Qwen CLI itself writes, which sits under the
+    operator's real ``$HOME`` and so falls outside any ``HERMES_HOME``
+    sandbox. Same shape as ``kanban_home()`` and its ``HERMES_KANBAN_HOME``
+    override.
+    """
+    override = os.environ.get("HERMES_QWEN_CLI_AUTH_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
     return Path.home() / ".qwen" / "oauth_creds.json"
 
 

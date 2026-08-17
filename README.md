@@ -260,8 +260,16 @@ Drop the second layer and you get real browser windows. On macOS `webbrowser`
 calls `osascript`, so an unguarded login path opens a live xAI consent page in
 whatever browser the developer runs.
 
-If you add a code path that opens a browser, cover it under both layers and
-keep `tests/test_hermetic_side_effect_guards.py` green.
+The same conftest points `HERMES_QWEN_CLI_AUTH_PATH` at a throwaway file.
+`~/.qwen/oauth_creds.json` resolves off `Path.home()`, and the suite does not
+redirect HOME, so the sandboxed `HERMES_HOME` never covered it. Without the
+override, `load_pool("qwen-oauth")` reads the developer's own Qwen token during
+provider-resolution tests, and a run can write fixture values back over it.
+
+Anything that reads or writes credentials outside `HERMES_HOME` needs an
+override of that shape. If you add a code path that opens a browser or touches
+another CLI's credential file, cover it and keep
+`tests/test_hermetic_side_effect_guards.py` green.
 
 ---
 

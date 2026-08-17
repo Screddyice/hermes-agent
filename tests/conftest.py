@@ -69,6 +69,30 @@ webbrowser.register(
 )
 
 
+# ── Keep the Qwen CLI's real credential file out of the suite ───────────────
+# `_qwen_cli_auth_path()` resolves `~/.qwen/oauth_creds.json` off `Path.home()`,
+# and this conftest deliberately does not redirect HOME (see the note in
+# `_hermetic_environment`), so the sandboxed HERMES_HOME does not cover it.
+# `agent.credential_pool.load_pool("qwen-oauth")` reads through that path, and
+# `resolve_runtime_provider` consults the pool whenever the requested provider
+# is "auto" or "openrouter". A developer with a real Qwen login therefore gets
+# their own token resolved mid-test, which is both a credential leak and a
+# source of machine-dependent failures: on one such machine
+# `test_qwen_oauth_auto_fallthrough_on_auth_failure` failed because the pool
+# short-circuited before the mocked credential call.
+#
+# Worse, the file is writable. A run on that machine had already overwritten
+# the operator's real `~/.qwen/oauth_creds.json` with fixture values.
+#
+# Point the path at a file that does not exist, so reads raise the ordinary
+# `qwen_auth_missing` AuthError. Child processes inherit the environment, which
+# an autouse fixture could not reach. This name does not end in a
+# `_CREDENTIAL_SUFFIXES` entry, so `_hermetic_environment` leaves it alone.
+os.environ["HERMES_QWEN_CLI_AUTH_PATH"] = str(
+    Path(tempfile.mkdtemp(prefix="hermes-test-qwen-")) / "oauth_creds.json"
+)
+
+
 # ── Sandbox HERMES_HOME before ANY test module is imported ──────────────────
 # `hermes_cli/main.py` calls `setup_logging()` at MODULE level, which resolves
 # `get_hermes_home()` and attaches rotating file handlers to the ROOT logger.

@@ -77,9 +77,28 @@ def qwen_env(tmp_path, monkeypatch):
 # _qwen_cli_auth_path
 # ---------------------------------------------------------------------------
 
-def test_qwen_cli_auth_path_returns_expected_location():
+def test_qwen_cli_auth_path_returns_expected_location(monkeypatch):
+    # conftest points HERMES_QWEN_CLI_AUTH_PATH at a throwaway file so the
+    # suite cannot read the operator's real Qwen login. Clear it to assert the
+    # default the Qwen CLI actually writes.
+    monkeypatch.delenv("HERMES_QWEN_CLI_AUTH_PATH", raising=False)
+
     path = _qwen_cli_auth_path()
+
     assert path == Path.home() / ".qwen" / "oauth_creds.json"
+
+
+def test_qwen_cli_auth_path_honors_env_override(monkeypatch, tmp_path):
+    override = tmp_path / "elsewhere" / "oauth_creds.json"
+    monkeypatch.setenv("HERMES_QWEN_CLI_AUTH_PATH", str(override))
+
+    assert _qwen_cli_auth_path() == override
+
+
+def test_qwen_cli_auth_path_override_expands_user(monkeypatch):
+    monkeypatch.setenv("HERMES_QWEN_CLI_AUTH_PATH", "~/custom-qwen/creds.json")
+
+    assert _qwen_cli_auth_path() == Path.home() / "custom-qwen" / "creds.json"
 
 
 # ---------------------------------------------------------------------------

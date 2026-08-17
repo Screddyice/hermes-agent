@@ -36,6 +36,39 @@ def test_child_processes_resolve_the_no_op_browser():
     assert resolved["name"] == "true"
 
 
+def test_child_processes_do_not_see_the_real_qwen_credentials():
+    """``~/.qwen/oauth_creds.json`` sits outside the ``HERMES_HOME`` sandbox.
+
+    ``_qwen_cli_auth_path()`` resolves it off ``Path.home()``, and this suite
+    deliberately does not redirect HOME, so without an environment-level
+    override a developer's real Qwen token reaches
+    ``load_pool("qwen-oauth")`` mid-test. ``resolve_runtime_provider``
+    consults that pool for any ``auto`` request, which both leaks the
+    credential and makes provider-resolution tests depend on whether the
+    machine happens to be logged into Qwen. Probe a child interpreter, since
+    that is exactly what an in-process patch cannot cover.
+    """
+    probe = (
+        "import json, pathlib;"
+        "from hermes_cli.auth import _qwen_cli_auth_path;"
+        "p = _qwen_cli_auth_path();"
+        "real = pathlib.Path.home() / '.qwen';"
+        "print(json.dumps({'under_real_home': str(p).startswith(str(real)),"
+        " 'exists': p.exists()}))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    resolved = json.loads(result.stdout)
+
+    assert resolved["under_real_home"] is False
+    assert resolved["exists"] is False
+
+
 def test_webbrowser_open_calls_are_neutralized(monkeypatch):
     """OAuth/browser tests should never reach the real browser registry."""
 
