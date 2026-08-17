@@ -2,7 +2,38 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import webbrowser
+
+
+def test_child_processes_resolve_the_no_op_browser():
+    """A monkeypatch stops at the process boundary; ``$BROWSER`` does not.
+
+    The suite runs one pytest subprocess per test file and shells out to the
+    ``hermes`` CLI, so the in-process fixture below cannot be the only guard.
+    Resolve the browser inside a *child* interpreter and assert it is the no-op
+    rather than the platform default — on macOS that default shells out to
+    ``osascript`` and opens a real OAuth consent page.
+    """
+    probe = (
+        "import json, webbrowser;"
+        "c = webbrowser.get();"
+        "print(json.dumps({'cls': type(c).__name__,"
+        " 'name': getattr(c, 'name', None)}))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    resolved = json.loads(result.stdout)
+
+    assert resolved["cls"] == "GenericBrowser"
+    assert resolved["name"] == "true"
 
 
 def test_webbrowser_open_calls_are_neutralized(monkeypatch):

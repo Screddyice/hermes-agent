@@ -245,6 +245,24 @@ uv pip install -e ".[all,dev]"
 scripts/run_tests.sh
 ```
 
+### The suite must not touch your browser or your Keychain
+
+`tests/conftest.py` blocks the desktop side effects that the OAuth code paths
+would otherwise fire on a developer machine. That takes two layers:
+
+- An autouse fixture patches `webbrowser.open` inside the test process.
+- Module-level code sets `BROWSER=true` before any test imports. The parallel
+  runner gives each test file its own `python -m pytest` subprocess, and some
+  tests shell out to the `hermes` CLI. A monkeypatch stops at the process
+  boundary; the environment variable crosses it.
+
+Drop the second layer and you get real browser windows. On macOS `webbrowser`
+calls `osascript`, so an unguarded login path opens a live xAI consent page in
+whatever browser the developer runs.
+
+If you add a code path that opens a browser, cover it under both layers and
+keep `tests/test_hermetic_side_effect_guards.py` green.
+
 ---
 
 ## Community
