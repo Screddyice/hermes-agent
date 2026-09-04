@@ -158,6 +158,11 @@ Hermes has two entry points: start the terminal UI with `hermes`, or run the gat
 
 For the full command lists, see the [CLI guide](https://hermes-agent.nousresearch.com/docs/user-guide/cli) and the [Messaging Gateway guide](https://hermes-agent.nousresearch.com/docs/user-guide/messaging).
 
+The gateway Runs API supports detached clients that poll long tasks. A run waiting for approval
+returns the approval request ID, redacted command, description, and valid choices in its status
+response. Clients must return that request ID with their decision. Hermes advances concurrent
+approvals in queue order and removes the approval data after the run resumes or ends.
+
 ---
 
 ## Documentation

@@ -6529,6 +6529,8 @@ class APIServerAdapter(BasePlatformAdapter):
         """Update pollable run status without exposing private agent objects."""
         now = time.time()
         current = self._run_statuses.get(run_id, {})
+        if status != "waiting_for_approval":
+            current.pop("approval", None)
         current.update({
             "object": "hermes.run",
             "run_id": run_id,
@@ -6539,6 +6541,31 @@ class APIServerAdapter(BasePlatformAdapter):
         current.update(fields)
         self._run_statuses[run_id] = current
         return current
+
+    def _pending_run_approval(self, run_id: str) -> Dict[str, Any] | None:
+        """Return the oldest pending approval in its public Runs API shape."""
+        approval_session_key = self._run_approval_sessions.get(run_id)
+        if not approval_session_key:
+            return None
+        from tools.approval import get_pending_gateway_approval
+
+        pending = get_pending_gateway_approval(approval_session_key)
+        if not pending:
+            return None
+        event = dict(pending)
+        if "command" in event:
+            from gateway.run import _redact_approval_command
+
+            event["command"] = _redact_approval_command(event.get("command"))
+        event["choices"] = _approval_event_choices(
+            smart_denied=bool(event.get("smart_denied")),
+            allow_permanent=event.get("allow_permanent") is not False,
+        )
+        return {
+            key: event[key]
+            for key in ("request_id", "command", "description", "choices")
+            if key in event
+        }
 
     def _make_run_event_callback(self, run_id: str, loop: "asyncio.AbstractEventLoop"):
         """Return a tool_progress_callback that pushes structured events to the run's SSE queue."""
@@ -6801,28 +6828,23 @@ class APIServerAdapter(BasePlatformAdapter):
                 self._active_run_agents[run_id] = agent
 
                 def _approval_notify(approval_data: Dict[str, Any]) -> None:
-                    event = dict(approval_data or {})
-                    # Redact credentials from the command before it enters the
-                    # SSE/API event stream — same egress bug as #48456, second
-                    # transport: API/desktop clients would otherwise receive the
-                    # raw command Tirith flagged. Reuse the gateway seam.
-                    if "command" in event:
-                        from gateway.run import _redact_approval_command
-
-                        event["command"] = _redact_approval_command(event.get("command"))
+                    approval = self._pending_run_approval(run_id)
+                    if approval is None:
+                        return
+                    current_approval = self._run_statuses.get(run_id, {}).get("approval") or {}
+                    if current_approval.get("request_id") == approval.get("request_id"):
+                        return
+                    event = dict(approval)
                     event.update({
                         "event": "approval.request",
                         "run_id": run_id,
                         "timestamp": time.time(),
-                        "choices": _approval_event_choices(
-                            smart_denied=bool(event.get("smart_denied")),
-                            allow_permanent=event.get("allow_permanent") is not False,
-                        ),
                     })
                     self._set_run_status(
                         run_id,
                         "waiting_for_approval",
                         last_event="approval.request",
+                        approval=approval,
                     )
                     try:
                         loop.call_soon_threadsafe(q.put_nowait, event)
@@ -7062,6 +7084,23 @@ class APIServerAdapter(BasePlatformAdapter):
                 _openai_error(f"Run not found: {run_id}", code="run_not_found"),
                 status=404,
             )
+        if status.get("status") == "waiting_for_approval":
+            pending_approval = self._pending_run_approval(run_id)
+            if pending_approval is None:
+                status = self._set_run_status(
+                    run_id,
+                    "running",
+                    last_event="approval.expired",
+                )
+            elif pending_approval.get("request_id") != (
+                status.get("approval") or {}
+            ).get("request_id"):
+                status = self._set_run_status(
+                    run_id,
+                    "waiting_for_approval",
+                    last_event="approval.request",
+                    approval=pending_approval,
+                )
         return web.json_response(status)
 
     async def _handle_run_events(self, request: "web.Request") -> "web.StreamResponse":
@@ -7148,6 +7187,17 @@ class APIServerAdapter(BasePlatformAdapter):
                 status=400,
             )
 
+        request_id = body.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            return web.json_response(
+                _openai_error(
+                    "Missing 'request_id' field",
+                    code="missing_approval_request_id",
+                ),
+                status=400,
+            )
+        request_id = request_id.strip()
+
         approval_session_key = self._run_approval_sessions.get(run_id)
         if not approval_session_key:
             return web.json_response(
@@ -7158,17 +7208,23 @@ class APIServerAdapter(BasePlatformAdapter):
                 status=409,
             )
 
-        resolve_all = (
-            _coerce_request_bool(body.get("all"), default=False)
-            or _coerce_request_bool(body.get("resolve_all"), default=False)
-        )
+        pending_approval = self._pending_run_approval(run_id)
+        if pending_approval is None or pending_approval.get("request_id") != request_id:
+            return web.json_response(
+                _openai_error(
+                    f"Run has no current approval with request_id: {request_id}",
+                    code="approval_not_pending",
+                ),
+                status=409,
+            )
+
         try:
             from tools.approval import resolve_gateway_approval
 
             resolved = resolve_gateway_approval(
                 approval_session_key,
                 choice,
-                resolve_all=resolve_all,
+                request_id=request_id,
             )
         except Exception as exc:
             logger.exception("[api_server] approval resolution failed for run %s", run_id)
@@ -7183,7 +7239,16 @@ class APIServerAdapter(BasePlatformAdapter):
                 status=409,
             )
 
-        self._set_run_status(run_id, "running", last_event="approval.responded")
+        pending_approval = self._pending_run_approval(run_id)
+        if pending_approval is None:
+            self._set_run_status(run_id, "running", last_event="approval.responded")
+        else:
+            self._set_run_status(
+                run_id,
+                "waiting_for_approval",
+                last_event="approval.request",
+                approval=pending_approval,
+            )
         q = self._run_streams.get(run_id)
         if q is not None:
             try:
@@ -7192,8 +7257,16 @@ class APIServerAdapter(BasePlatformAdapter):
                     "run_id": run_id,
                     "timestamp": time.time(),
                     "choice": choice,
+                    "request_id": request_id,
                     "resolved": resolved,
                 })
+                if pending_approval is not None:
+                    q.put_nowait({
+                        **pending_approval,
+                        "event": "approval.request",
+                        "run_id": run_id,
+                        "timestamp": time.time(),
+                    })
             except Exception:
                 pass
 
@@ -7201,6 +7274,7 @@ class APIServerAdapter(BasePlatformAdapter):
             "object": "hermes.run.approval_response",
             "run_id": run_id,
             "choice": choice,
+            "request_id": request_id,
             "resolved": resolved,
         })
 
