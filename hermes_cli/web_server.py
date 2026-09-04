@@ -5860,7 +5860,6 @@ def _memory_provider_setup_info(name: str) -> Dict[str, Any]:
 
 _MEMORY_PROVIDER_IMPORT_NAMES = {
     "honcho-ai": "honcho",
-    "mem0ai": "mem0",
     "hindsight-client": "hindsight_client",
     "hindsight-all": "hindsight",
 }

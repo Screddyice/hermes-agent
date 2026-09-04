@@ -5,6 +5,11 @@ import hermes_cli.memory_setup as memory_setup
 from hermes_cli.memory_setup import _CANCELLED, _curses_select
 
 
+def test_retired_mem0_provider_is_not_discoverable():
+    providers = {name for name, _setup, _provider in memory_setup._get_available_providers()}
+    assert "mem0" not in providers
+
+
 
 
 
@@ -75,10 +80,10 @@ def test_install_dependencies_force_reinstalls_versioned_specs(tmp_path, monkeyp
     so a downgraded/stripped bridge package is restored on hermes update."""
     import yaml as _yaml
 
-    plugin_dir = tmp_path / "mem0"
+    plugin_dir = tmp_path / "supermemory"
     plugin_dir.mkdir()
     (plugin_dir / "plugin.yaml").write_text(
-        _yaml.safe_dump({"pip_dependencies": ["mem0ai>=2.0.10,<3"]}), encoding="utf-8"
+        _yaml.safe_dump({"pip_dependencies": ["supermemory>=3.50,<4"]}), encoding="utf-8"
     )
     monkeypatch.setattr(
         "plugins.memory.find_provider_dir", lambda name: plugin_dir
@@ -92,7 +97,7 @@ def test_install_dependencies_force_reinstalls_versioned_specs(tmp_path, monkeyp
 
     monkeypatch.setattr("tools.lazy_deps.install_specs", fake_install_specs)
 
-    memory_setup._install_dependencies("mem0", force=True)
+    memory_setup._install_dependencies("supermemory", force=True)
 
     assert installed, "force=True must reach the install step"
-    assert any("mem0ai>=2.0.10,<3" in specs for specs in installed)
+    assert any("supermemory>=3.50,<4" in specs for specs in installed)

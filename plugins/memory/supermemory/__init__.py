@@ -572,7 +572,7 @@ class SupermemoryMemoryProvider(MemoryProvider):
         # being importable here would be a chicken-and-egg trap: on a sealed
         # Docker venv the package isn't present until ensure() runs, but
         # ensure() only runs once the provider is loaded — which this gates.
-        # Mirrors honcho/mem0, which check config only. No network calls.
+        # Mirrors honcho, which checks config only. No network calls.
         return bool(get_secret("SUPERMEMORY_API_KEY", ""))
 
     def get_config_schema(self):

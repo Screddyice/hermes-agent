@@ -1,19 +1,18 @@
-"""Regression tests: supermemory + mem0 memory providers must lazy-install
-their SDKs like honcho/hindsight.
+"""Regression tests: the supermemory provider must lazy-install its SDK.
 
-Both providers ship a third-party SDK (``supermemory`` / ``mem0ai``) that is
+The provider ships a third-party SDK (``supermemory``) that is
 NOT a core dependency. Before this fix they imported the SDK directly with no
 ``tools.lazy_deps.ensure()`` preflight and had no ``LAZY_DEPS`` allowlist
 entry. On the published Docker image the agent venv is sealed
 (``HERMES_DISABLE_LAZY_INSTALLS=1``) and lazy installs are redirected to a
 writable durable target (``HERMES_LAZY_INSTALL_TARGET``). honcho/hindsight
 route through ``ensure()`` and therefore install fine on a hosted instance;
-supermemory/mem0 never called it, so the SDK was never installed there and
+supermemory never called it, so the SDK was never installed there and
 the provider silently reported itself unavailable.
 
 These tests pin the contract:
 
-1. Both features are in the ``LAZY_DEPS`` allowlist (without an entry,
+1. The feature is in the ``LAZY_DEPS`` allowlist (without an entry,
    ``ensure()`` raises ``FeatureUnavailable`` — the original silent-dark bug).
 2. Each provider's SDK-import chokepoint actually calls ``ensure(<feature>)``.
 3. supermemory's ``is_available()`` no longer gates on the SDK being
@@ -36,7 +35,7 @@ import pytest
 import tools.lazy_deps as ld
 
 
-MEMORY_FEATURES = ("memory.supermemory", "memory.mem0")
+MEMORY_FEATURES = ("memory.supermemory",)
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +58,6 @@ class TestAllowlistEntries:
     def test_supermemory_spec_package(self):
         specs = ld.LAZY_DEPS["memory.supermemory"]
         assert any(ld._pkg_name_from_spec(s) == "supermemory" for s in specs)
-
-    def test_mem0_spec_package(self):
-        # mem0's pip package is ``mem0ai`` (imports as ``mem0``).
-        specs = ld.LAZY_DEPS["memory.mem0"]
-        assert any(ld._pkg_name_from_spec(s) == "mem0ai" for s in specs)
 
     @pytest.mark.parametrize("feature", MEMORY_FEATURES)
     def test_unknown_feature_would_raise_without_entry(self, feature, monkeypatch):
@@ -105,42 +99,6 @@ class TestSupermemoryEnsureCalled:
 
         assert ("memory.supermemory", {"prompt": False}) in calls, (
             "supermemory client did not call ensure('memory.supermemory', "
-            f"prompt=False); calls={calls}"
-        )
-
-
-class TestMem0EnsureCalled:
-    def test_create_backend_calls_ensure(self, monkeypatch):
-        """SupermemoryMemoryProvider-style mem0 provider must call
-        ensure('memory.mem0') in _create_backend before importing the SDK."""
-        from plugins.memory.mem0 import Mem0MemoryProvider
-
-        calls = []
-        monkeypatch.setattr(
-            ld, "ensure",
-            lambda feature, **kw: calls.append((feature, kw)),
-        )
-
-        prov = Mem0MemoryProvider()
-        # Platform mode is the default; force a known mode and stub the backend
-        # import so we isolate the ensure() call.
-        prov._mode = "platform"
-        prov._api_key = "k"
-
-        import sys
-        import types
-
-        fake = types.ModuleType("mem0")
-        fake.MemoryClient = lambda **kw: object()
-        fake.Memory = object
-        monkeypatch.setitem(sys.modules, "mem0", fake)
-        # _backend imports ``from mem0 import MemoryClient`` lazily inside
-        # PlatformBackend.__init__, so the fake module satisfies it.
-
-        prov._create_backend()
-
-        assert ("memory.mem0", {"prompt": False}) in calls, (
-            f"mem0 _create_backend did not call ensure('memory.mem0', "
             f"prompt=False); calls={calls}"
         )
 

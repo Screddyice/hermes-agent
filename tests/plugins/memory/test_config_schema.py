@@ -9,8 +9,8 @@ def test_unknown_provider_is_none():
 
 
 def test_plugin_without_schema_is_none():
-    # mem0 is a real plugin dir that declares no config_schema.py.
-    assert get_provider_config_schema("mem0") is None
+    # supermemory is a real plugin dir that declares no config_schema.py.
+    assert get_provider_config_schema("supermemory") is None
 
 
 def test_schemas_are_cached_per_provider():

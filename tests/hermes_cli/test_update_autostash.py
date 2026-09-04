@@ -77,7 +77,7 @@ def test_refresh_active_memory_provider_dependencies_reinstalls_active_provider(
 
     monkeypatch.setattr(
         "hermes_cli.config.load_config",
-        lambda: {"memory": {"provider": "mem0"}},
+        lambda: {"memory": {"provider": "supermemory"}},
     )
     monkeypatch.setattr(
         "hermes_cli.memory_setup._install_dependencies",
@@ -86,7 +86,7 @@ def test_refresh_active_memory_provider_dependencies_reinstalls_active_provider(
 
     hermes_main._refresh_active_memory_provider_dependencies()
 
-    assert recorded == [("mem0", True)]
+    assert recorded == [("supermemory", True)]
 
 
 
