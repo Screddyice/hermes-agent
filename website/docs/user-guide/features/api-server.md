@@ -372,6 +372,10 @@ Poll the current run state. This is useful for dashboards that need status witho
 ```
 
 Statuses are retained briefly after terminal states (`completed`, `failed`, or `cancelled`) for polling and UI reconciliation.
+While a run is `waiting_for_approval`, the response includes an `approval` object with the
+approval `request_id`, redacted command, description, and valid choices. Hermes removes that
+object when the run resumes or reaches a terminal state. When a run has several pending actions,
+status polling advances through them in queue order.
 
 ### GET /v1/runs/\{run_id\}/events
 
@@ -403,7 +407,17 @@ running.
 
 ### POST /v1/runs/\{run_id\}/approval
 
-Resolve a pending approval for a run that is waiting on a human decision (for example, a tool call gated behind an approval policy). The body carries the approval decision; the run resumes once the decision is recorded. This endpoint is advertised in `/v1/capabilities` as the `run_approval` feature so external UIs can detect support before surfacing an approval prompt.
+Resolve a pending approval for a run that is waiting on a human decision, such as a tool call
+gated behind an approval policy. Send the `request_id` from the current status with a `choice` of
+`once`, `session`, `always`, or `deny`:
+
+```json
+{"request_id": "approval_abc123", "choice": "once"}
+```
+
+Hermes rejects missing or stale request IDs, so a delayed client decision cannot resolve a newer
+action. The run resumes when no approvals remain; otherwise its status advances to the next queued
+approval. `/v1/capabilities` advertises this endpoint as the `run_approval` feature.
 
 ## Jobs API (background scheduled work)
 

@@ -1,4 +1,4 @@
-"""Regression test for approval prompt credential redaction (issue #48456).
+"""Regression tests for approval prompt credential redaction (issue #48456).
 
 When Tirith flags a command for containing a credential-shaped pattern, the
 gateway approval prompt must redact the credential from the command text
@@ -6,10 +6,9 @@ before sending it to the chat platform. Without this fix, the raw command
 (with the credential in plaintext) is sent verbatim to Telegram/Discord/etc.,
 undoing Tirith's redaction one layer up.
 
-The redaction is wired through the module-level ``_redact_approval_command``
-seam. These tests bind that seam -- the production wiring -- not just the
-underlying ``redact_sensitive_text`` helper, so they fail if the redaction
-call is removed from either approval path.
+The tests exercise the module-level ``_redact_approval_command`` seam and both
+approval transports at runtime. They fail if either the chat-platform prompt
+or the Runs API response exposes the original command.
 
 Credential fixtures are built at runtime from a benign prefix + a run of
 ``X`` characters (the same trick tests/agent/test_redact.py uses): they match
@@ -17,7 +16,16 @@ the redactor regexes so the assertions stay meaningful, but contain no real
 or real-looking key, so secret scanners do not flag this file.
 """
 
-from gateway.run import _redact_approval_command
+from concurrent.futures import Future
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from gateway.config import Platform, PlatformConfig
+from gateway.platforms.api_server import APIServerAdapter
+from gateway.run import TurnRunner, _redact_approval_command
+from gateway.session import SessionSource
+from gateway.turn_context import TurnContext
+from tools import approval as approval_mod
 
 # Synthetic, scanner-safe credential fixtures. Each matches its redactor
 # regex (ghp_/sk-/JWT) but is unmistakably fake -- a run of X's, never a
@@ -61,64 +69,129 @@ class TestRedactApprovalCommand:
 
 
 class TestApprovalCommandWiring:
-    """Guard the production wiring on BOTH approval-notify transports:
-    1. the chat-platform path (_approval_notify_sync in gateway/run.py), and
-    2. the SSE/API path (_approval_notify in gateway/platforms/api_server.py),
-    each of which must route the command through _redact_approval_command and
-    REASSIGN the redacted value before any send/enqueue (so the raw command
-    cannot reach a client). Uses AST (not char-offset string slicing) so a
-    benign refactor doesn't cause a false failure, and so a discarded-result
-    call (`_redact(cmd); send(cmd)`) does NOT pass."""
-
-    def _assert_redacts_then_uses(self, module, func_name: str, sink_substr: str):
-        """Parse `module`'s full AST, locate the (possibly nested) function
-        `func_name`, and assert it contains an assignment
-        `<x> = _redact_approval_command(...)` whose result is then used by a
-        statement matching `sink_substr` on a LATER line. Walking the real AST
-        (not a source slice) is refactor-robust and rejects discarded-result
-        calls (the call must be an assignment, not a bare expression)."""
-        import ast
-        import inspect
-
-        source = inspect.getsource(module)
-        tree = ast.parse(source)
-        target_fn = None
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-                target_fn = node
-                break
-        assert target_fn is not None, f"function {func_name} not found in {module.__name__}"
-
-        redact_line = None
-        for node in ast.walk(target_fn):
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-                fn = node.value.func
-                if isinstance(fn, ast.Name) and fn.id == "_redact_approval_command":
-                    redact_line = node.lineno
-        assert redact_line is not None, (
-            f"{func_name} must assign the result of _redact_approval_command(...) "
-            "(a discarded-result call would still leak the raw command)"
-        )
-
-        sink_line = None
-        for node in ast.walk(target_fn):
-            seg = ast.get_source_segment(source, node)
-            if seg and sink_substr in seg and getattr(node, "lineno", 0) > redact_line:
-                sink_line = node.lineno
-                break
-        assert sink_line is not None, (
-            f"`{sink_substr}` sink not found after the redaction in {func_name}"
-        )
+    """Exercise both approval-notify transports through their public effects."""
 
     def test_chat_platform_path_redacts_before_send(self):
-        import gateway.run as run
+        sent = {}
 
-        self._assert_redacts_then_uses(run, "_approval_notify_sync", "send_exec_approval")
+        class _ApprovalAdapter:
+            def pause_typing_for_chat(self, _chat_id):
+                return None
 
-    def test_sse_api_path_redacts_before_enqueue(self):
-        from gateway.platforms import api_server
+            async def send_exec_approval(self, **kwargs):
+                sent.update(kwargs)
+                return SimpleNamespace(success=True, error=None)
 
-        self._assert_redacts_then_uses(api_server, "_approval_notify", "put_nowait")
+        class _ApprovalAgent:
+            def __init__(self, **kwargs):
+                self.model = kwargs["model"]
+                self.session_id = kwargs["session_id"]
+                self.tools = []
+                self.context_compressor = SimpleNamespace(
+                    last_prompt_tokens=0,
+                    context_length=200_000,
+                )
+                self.session_prompt_tokens = 0
+                self.session_completion_tokens = 0
+
+            def run_conversation(self, _message, **_kwargs):
+                notify = approval_mod._gateway_notify_cbs["approval-redaction-session"]
+                notify({
+                    "command": "curl -H 'Authorization: token " + _FAKE_GHP
+                    + "' https://api.github.com/user",
+                    "description": "inspect the authenticated user",
+                })
+                return {"final_response": "done", "messages": []}
+
+        gateway_runner = MagicMock()
+        gateway_runner.config = SimpleNamespace(streaming=None)
+        gateway_runner._provider_routing = {}
+        gateway_runner._agent_cache_lock = None
+        gateway_runner._agent_cache = {}
+        gateway_runner._session_db = None
+        gateway_runner._prefill_messages = None
+        gateway_runner._pending_model_notes = {}
+        gateway_runner._pending_skills_reload_notes = {}
+        gateway_runner.session_store._entries = {}
+        gateway_runner._get_system_prompt_for_channel.return_value = None
+        gateway_runner._resolve_session_agent_runtime.return_value = ("test-model", {})
+        gateway_runner._resolve_session_reasoning_config.return_value = None
+        gateway_runner._resolve_session_service_tier.return_value = None
+        gateway_runner._resolve_turn_agent_config.return_value = {
+            "model": "test-model",
+            "runtime": {},
+        }
+        gateway_runner._agent_config_signature.return_value = ("test-signature",)
+        gateway_runner._extract_cache_busting_config.return_value = {}
+        gateway_runner._refresh_fallback_model.return_value = None
+        gateway_runner._consume_pending_native_image_paths.return_value = []
+        gateway_runner._consume_pending_turn_sidecar_notes.return_value = []
+        gateway_runner._is_telegram_topic_lane.return_value = False
+        gateway_runner._is_discord_auto_thread_lane.return_value = False
+        gateway_runner._is_relay_discord_channel_lane.return_value = False
+
+        adapter = _ApprovalAdapter()
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="approval-chat",
+            user_id="approval-user",
+        )
+        ctx = TurnContext(
+            source=source,
+            message="inspect my account",
+            history=[],
+            session_id="approval-redaction-session",
+            session_key="approval-redaction-session",
+            user_config={},
+            AIAgent=_ApprovalAgent,
+            resolve_display_setting=lambda *_args: False,
+            _run_still_current=lambda: True,
+            _status_adapter=adapter,
+            _status_chat_id="approval-chat",
+            _status_thread_metadata={},
+            _hooks_ref=SimpleNamespace(loaded_hooks=False),
+        )
+
+        def _run_scheduled(coro, *_args, **_kwargs):
+            import asyncio
+
+            future = Future()
+            future.set_result(asyncio.run(coro))
+            return future
+
+        with patch("gateway.run.safe_schedule_threadsafe", side_effect=_run_scheduled):
+            result = TurnRunner(gateway_runner, ctx).run_sync()
+
+        assert result["final_response"] == "done"
+        assert _FAKE_GHP not in sent["command"]
+        assert "curl" in sent["command"]
+        assert "github.com" in sent["command"]
+
+    def test_runs_api_path_redacts_pending_approval(self):
+        adapter = APIServerAdapter(PlatformConfig(enabled=True))
+        run_id = "run-redaction"
+        entry = approval_mod._ApprovalEntry({
+            "request_id": "approval-redaction",
+            "command": "curl -H 'Authorization: token " + _FAKE_GHP
+            + "' https://api.github.com/user",
+            "description": "inspect the authenticated user",
+        })
+        adapter._run_approval_sessions[run_id] = run_id
+        with approval_mod._lock:
+            approval_mod._gateway_queues[run_id] = [entry]
+
+        try:
+            pending = adapter._pending_run_approval(run_id)
+        finally:
+            with approval_mod._lock:
+                approval_mod._gateway_queues.pop(run_id, None)
+            adapter._run_approval_sessions.pop(run_id, None)
+
+        assert pending is not None
+        assert pending["request_id"] == "approval-redaction"
+        assert _FAKE_GHP not in pending["command"]
+        assert "curl" in pending["command"]
+        assert "github.com" in pending["command"]
 
 
 class TestApprovalTextFallbackContract:
@@ -134,5 +207,4 @@ class TestApprovalTextFallbackContract:
         assert "`/approve`" in text
         assert "approve session" not in text
         assert "approve always" not in text
-
 

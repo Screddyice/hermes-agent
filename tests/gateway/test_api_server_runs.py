@@ -298,6 +298,131 @@ class TestRunStatus:
                 assert mock_agent.run_conversation.call_args.kwargs["task_id"] == "space-session"
                 assert status["session_id"] == "space-session"
 
+    @pytest.mark.asyncio
+    async def test_status_exposes_pending_approval_and_clears_it_after_resume(self, adapter):
+        app = _create_runs_app(adapter)
+        approval_published = threading.Event()
+        release_run = threading.Event()
+
+        def _run_with_approval(user_message=None, conversation_history=None, task_id=None):
+            approval = approval_mod._ApprovalEntry({
+                "request_id": "approval-1",
+                "command": "send-report --recipient owner@example.com",
+                "description": "Send the completed report",
+                "pattern_keys": ["outbound-send"],
+                "allow_permanent": False,
+            })
+            with approval_mod._lock:
+                notify = approval_mod._gateway_notify_cbs[task_id]
+                approval_mod._gateway_queues[task_id] = [approval]
+            notify(approval.data)
+            approval_published.set()
+            release_run.wait(timeout=3.0)
+            return {"final_response": "done"}
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_create_agent") as mock_create:
+                mock_agent = MagicMock()
+                mock_agent.run_conversation.side_effect = _run_with_approval
+                mock_agent.session_prompt_tokens = 0
+                mock_agent.session_completion_tokens = 0
+                mock_agent.session_total_tokens = 0
+                mock_create.return_value = mock_agent
+
+                start = await cli.post("/v1/runs", json={"input": "send it"})
+                run_id = (await start.json())["run_id"]
+                assert approval_published.wait(timeout=3.0)
+
+                pending = await (await cli.get(f"/v1/runs/{run_id}")).json()
+                assert pending["status"] == "waiting_for_approval"
+                assert pending["approval"] == {
+                    "request_id": "approval-1",
+                    "command": "send-report --recipient owner@example.com",
+                    "description": "Send the completed report",
+                    "choices": ["once", "session", "deny"],
+                }
+
+                release_run.set()
+                for _ in range(40):
+                    completed = await (await cli.get(f"/v1/runs/{run_id}")).json()
+                    if completed["status"] == "completed":
+                        break
+                    await asyncio.sleep(0.05)
+
+                assert completed["status"] == "completed"
+                assert "approval" not in completed
+
+    @pytest.mark.asyncio
+    async def test_status_advances_when_an_older_approval_expires(self, adapter):
+        app = _create_runs_app(adapter)
+        run_id = "run_expired_approval"
+        current = approval_mod._ApprovalEntry({
+            "request_id": "approval-current",
+            "command": "bash -c current-danger",
+            "description": "current approval",
+            "pattern_keys": ["shell-c"],
+        })
+        adapter._run_approval_sessions[run_id] = run_id
+        adapter._run_statuses[run_id] = {
+            "object": "hermes.run",
+            "run_id": run_id,
+            "status": "waiting_for_approval",
+            "approval": {
+                "request_id": "approval-expired",
+                "command": "bash -c expired-danger",
+                "description": "expired approval",
+                "choices": ["once", "session", "always", "deny"],
+            },
+        }
+        with approval_mod._lock:
+            approval_mod._gateway_queues[run_id] = [current]
+
+        try:
+            async with TestClient(TestServer(app)) as cli:
+                status = await (await cli.get(f"/v1/runs/{run_id}")).json()
+                assert status["status"] == "waiting_for_approval"
+                assert status["approval"]["request_id"] == "approval-current"
+        finally:
+            with approval_mod._lock:
+                approval_mod._gateway_queues.pop(run_id, None)
+            adapter._run_approval_sessions.pop(run_id, None)
+            adapter._run_statuses.pop(run_id, None)
+
+    @pytest.mark.asyncio
+    async def test_approval_refresh_cannot_regress_a_terminal_run(self, adapter):
+        app = _create_runs_app(adapter)
+        run_id = "run_completed_during_refresh"
+        adapter._run_statuses[run_id] = {
+            "object": "hermes.run",
+            "run_id": run_id,
+            "status": "waiting_for_approval",
+            "approval": {"request_id": "approval-expired"},
+        }
+
+        def _finish_while_checking(_run_id):
+            adapter._set_run_status(
+                run_id,
+                "completed",
+                output="done",
+                last_event="run.completed",
+            )
+            return None
+
+        with patch.object(
+            adapter,
+            "_pending_run_approval",
+            side_effect=_finish_while_checking,
+        ):
+            async with TestClient(TestServer(app)) as cli:
+                response = await cli.get(f"/v1/runs/{run_id}")
+                status = await response.json()
+
+        assert response.status == 200
+        assert status["status"] == "completed"
+        assert status["last_event"] == "run.completed"
+        assert status["output"] == "done"
+        assert "approval" not in status
+
 
 # ---------------------------------------------------------------------------
 # GET /v1/runs/{run_id}/events — SSE event stream
@@ -335,7 +460,7 @@ class TestRunEvents:
 
 
     @pytest.mark.asyncio
-    async def test_approval_resolve_all_is_scoped_to_target_run(self, auth_adapter):
+    async def test_approval_request_id_is_scoped_to_target_run(self, auth_adapter):
         """Same client session_id must not let one run approve another run's queue."""
         app = _create_runs_app(auth_adapter)
         async with TestClient(TestServer(app)) as cli:
@@ -381,7 +506,10 @@ class TestRunEvents:
 
                 approval_resp = await cli.post(
                     f"/v1/runs/{attacker_run}/approval",
-                    json={"choice": "always", "resolve_all": True},
+                    json={
+                        "choice": "always",
+                        "request_id": attacker_entry.data["request_id"],
+                    },
                     headers={"Authorization": "Bearer sk-secret"},
                 )
                 approval_data = await approval_resp.json()
@@ -403,6 +531,86 @@ class TestRunEvents:
                     approval_mod._gateway_queues.pop(victim_run, None)
                 victim_interrupted.set()
                 attacker_interrupted.set()
+
+    @pytest.mark.asyncio
+    async def test_approval_requires_the_displayed_request_id_and_advances_fifo(self, adapter):
+        app = _create_runs_app(adapter)
+        run_id = "run_concurrent"
+        first = approval_mod._ApprovalEntry({
+            "command": "bash -c first-danger",
+            "description": "first approval",
+            "pattern_keys": ["shell-c"],
+        })
+        second = approval_mod._ApprovalEntry({
+            "command": "bash -c second-danger",
+            "description": "second approval",
+            "pattern_keys": ["shell-c"],
+        })
+        adapter._run_approval_sessions[run_id] = run_id
+        adapter._run_statuses[run_id] = {
+            "object": "hermes.run",
+            "run_id": run_id,
+            "status": "waiting_for_approval",
+            "approval": {
+                "request_id": first.data["request_id"],
+                "command": first.data["command"],
+                "description": first.data["description"],
+                "choices": ["once", "session", "always", "deny"],
+            },
+        }
+        with approval_mod._lock:
+            approval_mod._gateway_queues[run_id] = [first, second]
+
+        try:
+            async with TestClient(TestServer(app)) as cli:
+                missing = await cli.post(
+                    f"/v1/runs/{run_id}/approval",
+                    json={"choice": "once"},
+                )
+                assert missing.status == 400
+                assert first.result is None
+                assert second.result is None
+
+                out_of_order = await cli.post(
+                    f"/v1/runs/{run_id}/approval",
+                    json={"choice": "once", "request_id": second.data["request_id"]},
+                )
+                assert out_of_order.status == 409
+                assert first.result is None
+                assert second.result is None
+
+                stale = await cli.post(
+                    f"/v1/runs/{run_id}/approval",
+                    json={"choice": "once", "request_id": "stale-request"},
+                )
+                assert stale.status == 409
+                assert first.result is None
+                assert second.result is None
+
+                resolved_first = await cli.post(
+                    f"/v1/runs/{run_id}/approval",
+                    json={"choice": "once", "request_id": first.data["request_id"]},
+                )
+                assert resolved_first.status == 200
+                assert first.result == "once"
+                assert second.result is None
+                status = await (await cli.get(f"/v1/runs/{run_id}")).json()
+                assert status["status"] == "waiting_for_approval"
+                assert status["approval"]["request_id"] == second.data["request_id"]
+
+                resolved_second = await cli.post(
+                    f"/v1/runs/{run_id}/approval",
+                    json={"choice": "deny", "request_id": second.data["request_id"]},
+                )
+                assert resolved_second.status == 200
+                status = await (await cli.get(f"/v1/runs/{run_id}")).json()
+                assert status["status"] == "running"
+                assert "approval" not in status
+        finally:
+            with approval_mod._lock:
+                approval_mod._gateway_queues.pop(run_id, None)
+            adapter._run_approval_sessions.pop(run_id, None)
+            adapter._run_statuses.pop(run_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +830,7 @@ class TestRunLifecycleSweep:
 
                 approval_resp = await cli.post(
                     f"/v1/runs/{run_id}/approval",
-                    json={"choice": "once"},
+                    json={"choice": "once", "request_id": pending.data["request_id"]},
                 )
                 assert approval_resp.status == 200
                 assert pending.event.is_set()
