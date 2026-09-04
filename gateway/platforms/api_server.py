@@ -1432,6 +1432,7 @@ class APIServerAdapter(BasePlatformAdapter):
         self._stopping_run_ids: set[str] = set()
         # Pollable run status for dashboards and external control-plane UIs.
         self._run_statuses: Dict[str, Dict[str, Any]] = {}
+        self._run_status_lock = threading.Lock()
         # Active approval session key for each run_id.  The approval core
         # resolves requests by session key, while API clients address the
         # in-flight run by run_id.
@@ -6524,23 +6525,27 @@ class APIServerAdapter(BasePlatformAdapter):
 
     _RUN_STREAM_TTL = 300  # seconds before orphaned runs are swept
     _RUN_STATUS_TTL = 3600  # seconds to retain terminal run status for polling
+    _RUN_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
     def _set_run_status(self, run_id: str, status: str, **fields: Any) -> Dict[str, Any]:
         """Update pollable run status without exposing private agent objects."""
         now = time.time()
-        current = self._run_statuses.get(run_id, {})
-        if status != "waiting_for_approval":
-            current.pop("approval", None)
-        current.update({
-            "object": "hermes.run",
-            "run_id": run_id,
-            "status": status,
-            "updated_at": now,
-        })
-        current.setdefault("created_at", fields.pop("created_at", now))
-        current.update(fields)
-        self._run_statuses[run_id] = current
-        return current
+        with self._run_status_lock:
+            current = dict(self._run_statuses.get(run_id, {}))
+            if current.get("status") in self._RUN_TERMINAL_STATUSES:
+                return current
+            if status != "waiting_for_approval":
+                current.pop("approval", None)
+            current.update({
+                "object": "hermes.run",
+                "run_id": run_id,
+                "status": status,
+                "updated_at": now,
+            })
+            current.setdefault("created_at", fields.pop("created_at", now))
+            current.update(fields)
+            self._run_statuses[run_id] = current
+            return current
 
     def _pending_run_approval(self, run_id: str) -> Dict[str, Any] | None:
         """Return the oldest pending approval in its public Runs API shape."""

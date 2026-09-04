@@ -388,6 +388,41 @@ class TestRunStatus:
             adapter._run_approval_sessions.pop(run_id, None)
             adapter._run_statuses.pop(run_id, None)
 
+    @pytest.mark.asyncio
+    async def test_approval_refresh_cannot_regress_a_terminal_run(self, adapter):
+        app = _create_runs_app(adapter)
+        run_id = "run_completed_during_refresh"
+        adapter._run_statuses[run_id] = {
+            "object": "hermes.run",
+            "run_id": run_id,
+            "status": "waiting_for_approval",
+            "approval": {"request_id": "approval-expired"},
+        }
+
+        def _finish_while_checking(_run_id):
+            adapter._set_run_status(
+                run_id,
+                "completed",
+                output="done",
+                last_event="run.completed",
+            )
+            return None
+
+        with patch.object(
+            adapter,
+            "_pending_run_approval",
+            side_effect=_finish_while_checking,
+        ):
+            async with TestClient(TestServer(app)) as cli:
+                response = await cli.get(f"/v1/runs/{run_id}")
+                status = await response.json()
+
+        assert response.status == 200
+        assert status["status"] == "completed"
+        assert status["last_event"] == "run.completed"
+        assert status["output"] == "done"
+        assert "approval" not in status
+
 
 # ---------------------------------------------------------------------------
 # GET /v1/runs/{run_id}/events — SSE event stream
