@@ -1812,8 +1812,8 @@ DEFAULT_CONFIG = {
         "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
         "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
         # External memory provider plugin (empty = built-in only).
-        # Set to a provider name to activate: "openviking", "mem0",
-        # "hindsight", "holographic", "retaindb", "byterover".
+        # Set to a provider name to activate: "honcho", "openviking",
+        # "hindsight", "holographic", "retaindb", "byterover", "supermemory".
         # Only ONE external provider is allowed at a time.
         "provider": "",
     },
@@ -4235,15 +4235,6 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
 
-    # ── Mem0 ──
-    "MEM0_API_KEY": {
-        "description": "Mem0 Platform API key for semantic persistent memory",
-        "prompt": "Mem0 API key",
-        "url": "https://app.mem0.ai",
-        "tools": ["mem0_search"],
-        "password": True,
-        "category": "tool",
-    },
 
     # ── RetainDB ──
     "RETAINDB_API_KEY": {

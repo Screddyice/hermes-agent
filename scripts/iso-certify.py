@@ -116,7 +116,7 @@ def seed_scratch_home(home: Path, *, isolation: str, heartbeat_secs: int, respaw
             "compute_host_heartbeat_secs": heartbeat_secs,
             "compute_host_respawn_max": respawn_max,
         },
-        # Keep memory/mem0/skills side-machinery from reaching out.
+        # Keep memory-provider and skill side-machinery from reaching out.
         "memory": {"enabled": False},
     }
     # config.yaml is the canonical config; write it directly.

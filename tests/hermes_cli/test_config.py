@@ -533,7 +533,7 @@ class TestMemoryProviderEnvVarsRegistry:
     """Every memory provider that reads an API key from the environment must
     have that key catalogued in OPTIONAL_ENV_VARS so the dashboard Keys page
     and `hermes setup` surface it (previously only Honcho was listed, leaving
-    Hindsight/Supermemory/Mem0/RetainDB/ByteRover/OpenViking invisible).
+    Hindsight/Supermemory/RetainDB/ByteRover/OpenViking invisible).
 
     This is a behavior contract, not a snapshot: it asserts each provider's
     primary credential key is present, tool-categorised, and password-masked —
@@ -545,7 +545,6 @@ class TestMemoryProviderEnvVarsRegistry:
         "HONCHO_API_KEY": "honcho_context",
         "HINDSIGHT_API_KEY": "hindsight_recall",
         "SUPERMEMORY_API_KEY": "supermemory_search",
-        "MEM0_API_KEY": "mem0_search",
         "RETAINDB_API_KEY": "retaindb_search",
         "BRV_API_KEY": "brv_query",
         "OPENVIKING_API_KEY": "viking_search",

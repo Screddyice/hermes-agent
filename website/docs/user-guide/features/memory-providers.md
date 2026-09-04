@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: "Memory Providers"
-description: "External memory provider plugins — Honcho, OpenViking, Mem0, Hindsight, Holographic, RetainDB, ByteRover, Supermemory"
+description: "External memory provider plugins — Honcho, OpenViking, Hindsight, Holographic, RetainDB, ByteRover, Supermemory"
 ---
 
 # Memory Providers
@@ -22,7 +22,7 @@ Or set manually in `~/.hermes/config.yaml`:
 
 ```yaml
 memory:
-  provider: openviking   # or honcho, mem0, hindsight, holographic, retaindb, byterover, supermemory
+  provider: openviking   # or honcho, hindsight, holographic, retaindb, byterover, supermemory
 ```
 
 ## How It Works
@@ -333,84 +333,6 @@ live in `ovcli.conf` (`OPENVIKING_CLI_CONFIG_FILE` or
 
 ---
 
-### Mem0
-
-Server-side LLM fact extraction with semantic search, reranking, and automatic deduplication. Three connection modes: **Platform** (Mem0 Cloud), **self-hosted dashboard** (a Mem0 server you run via Docker), and **OSS** (Mem0 in-process with your own LLM + vector store).
-
-| | |
-|---|---|
-| **Best for** | Hands-off memory management — Mem0 handles extraction automatically |
-| **Requires** | `pip install mem0ai` + API key (platform), a running Mem0 server (self-hosted dashboard), or an LLM + vector store (OSS) |
-| **Data storage** | Mem0 Cloud (platform), your own Mem0 server (self-hosted dashboard), or in-process (OSS) |
-| **Cost** | Mem0 pricing (platform) / free (self-hosted or OSS) |
-
-**Tools (4):** `mem0_search` (semantic search; optional reranking in platform mode, off by default), `mem0_add` (store verbatim facts), `mem0_update` (update by ID), `mem0_delete` (delete by ID)
-
-**Setup (Platform):**
-```bash
-hermes memory setup    # select "mem0" → "Platform"
-# Or manually:
-hermes config set memory.provider mem0
-echo "MEM0_API_KEY=your-key" >> ~/.hermes/.env
-```
-
-**Setup (OSS):**
-```bash
-hermes memory setup    # select "mem0" → "Open Source (self-hosted)"
-# Or via flags:
-hermes memory setup mem0 --mode oss --oss-llm openai --oss-llm-key sk-... --oss-vector qdrant
-```
-
-Preview without writing files:
-```bash
-hermes memory setup mem0 --mode oss --oss-llm-key sk-... --dry-run
-```
-
-**Setup (Self-Hosted Dashboard):** connect to a Mem0 server you run via Docker (the dashboard's REST API):
-
-```bash
-hermes memory setup    # select "mem0" → "Self-hosted server"
-# Or via flags:
-hermes memory setup mem0 --mode selfhosted --host http://localhost:8888 --api-key your-admin-api-key
-```
-
-Or configure manually — either as env vars:
-
-```bash
-echo "MEM0_HOST=http://localhost:8888" >> ~/.hermes/.env
-echo "MEM0_API_KEY=your-admin-api-key" >> ~/.hermes/.env
-```
-
-or in `mem0.json`:
-
-```json
-{ "host": "http://localhost:8888", "api_key": "your-admin-api-key" }
-```
-
-The plugin authenticates with `X-API-Key` and uses the server's `/search` / `/memories` routes. `api_key` is optional (omit only for `AUTH_DISABLED` servers). Don't set `mode: oss` — it takes precedence over `host`.
-
-**Config:** `$HERMES_HOME/mem0.json` (behavioral settings). Only the secret `MEM0_API_KEY` belongs in `~/.hermes/.env`.
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `mode` | `platform` | `platform` (Mem0 Cloud) or `oss` (self-managed, in-process) |
-| `host` | — | Self-hosted Mem0 server URL (Docker dashboard). Routes over HTTP with `X-API-Key`; don't combine with `mode: oss` |
-| `user_id` | `hermes-user` | User identifier |
-| `agent_id` | `hermes` | Agent identifier |
-| `rerank` | `false` | Rerank search results for relevance (platform mode only) |
-
-**OSS supported providers:**
-
-| Component | Providers |
-|-----------|-----------|
-| LLM | openai, ollama |
-| Embedder | openai, ollama |
-| Vector Store | qdrant (local/server), pgvector |
-
-**Switching modes:** Re-run `hermes memory setup mem0 --mode <platform|selfhosted|oss>` or edit `mem0.json` directly.
-
----
-
 ### Hindsight
 
 Long-term memory with knowledge graph, entity resolution, and multi-strategy retrieval. The `hindsight_reflect` tool provides cross-memory synthesis that no other provider offers. Automatically retains full conversation turns (including tool calls) with session-level document tracking.
@@ -660,7 +582,6 @@ hermes memory setup
 |----------|---------|------|-------|-------------|----------------|
 | **Honcho** | Cloud | Paid | 5 | `honcho-ai` | Dialectic user modeling + session-scoped context |
 | **OpenViking** | Self-hosted | Free | 6 | `openviking` + server | Filesystem hierarchy + tiered loading |
-| **Mem0** | Cloud/Self-hosted | Free/Paid | 4 | `mem0ai` | Server-side LLM extraction + self-hosted/OSS modes |
 | **Hindsight** | Cloud/Local | Free/Paid | 3 | `hindsight-client` | Knowledge graph + reflect synthesis |
 | **Holographic** | Local | Free | 2 | None | HRR algebra + trust scoring |
 | **RetainDB** | Cloud | $20/mo | 10 | `requests` | Delta compression |
@@ -673,7 +594,7 @@ hermes memory setup
 Each provider's data is isolated per [profile](/user-guide/profiles):
 
 - **Local storage providers** (Holographic, ByteRover) use `$HERMES_HOME/` paths which differ per profile
-- **Config file providers** (Honcho, Mem0, Hindsight, Supermemory) store config in `$HERMES_HOME/` so each profile has its own credentials
+- **Config file providers** (Honcho, Hindsight, Supermemory) store config in `$HERMES_HOME/` so each profile has its own credentials
 - **Cloud providers** (RetainDB) auto-derive profile-scoped project names
 - **Env var providers** (OpenViking) are configured via each profile's `.env` file
 
