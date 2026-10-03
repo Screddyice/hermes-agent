@@ -972,6 +972,31 @@ def test_core_runtime_is_fail_open_without_a_published_binding(monkeypatch, capl
     relay_runtime._reset_for_tests()
 
 
+def test_core_runtime_rejects_shadowed_binding_without_lifecycle_api(
+    monkeypatch,
+    caplog,
+):
+    """A plugin package on PYTHONPATH must not masquerade as the native binding."""
+    relay_shared_metrics._reset_for_tests()
+    relay_runtime._reset_for_tests()
+
+    shadowed = object()
+
+    def load_shadowed(name: str):
+        assert name == "nemo_relay"
+        return shadowed
+
+    monkeypatch.setattr(relay_runtime.importlib, "import_module", load_shadowed)
+
+    assert relay_runtime.get_runtime() is None
+    host = relay_runtime.get_host()
+    assert isinstance(host, relay_runtime.NoopRelayRuntime)
+    assert "required lifecycle API" in host.reason
+    assert "scope.push" in host.reason
+    assert "Hermes Relay runtime initialization failed" in caplog.text
+    relay_runtime._reset_for_tests()
+
+
 def test_core_task_instrumentation_preserves_prompt_history_and_tool_schema(
     direct_runtime,
     monkeypatch,

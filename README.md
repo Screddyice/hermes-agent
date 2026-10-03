@@ -107,6 +107,16 @@ response open for the configured MCP tool timeout; the connect timeout still
 limits the initial handshake. Set the server's `timeout` high enough for the
 tool's expected work instead of relying on the SDK's 300-second read default.
 
+#### NeMo Relay import collisions
+
+The optional `observability/nemo_relay` plugin must not be added directly to
+`PYTHONPATH`. Its package name is the same as the native `nemo-relay` binding,
+so that path can shadow the binding and break conversation startup. Hermes
+validates the binding lifecycle API at startup and falls back to its no-op
+runtime when the native wheel is unavailable or shadowed. Remove the plugin
+directory from `PYTHONPATH` and install the `nemo-relay` extra when Relay
+execution is required.
+
 ---
 
 ## Getting Started
