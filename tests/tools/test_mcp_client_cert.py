@@ -149,6 +149,7 @@ class TestHTTPClientCert:
 
         asyncio.run(_drive())
         assert captured.get("cert") == str(cert)
+        assert captured["timeout"].read is None
 
 
     def test_missing_cert_file_surfaces_clear_error(self, tmp_path):

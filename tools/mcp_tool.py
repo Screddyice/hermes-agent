@@ -3527,7 +3527,12 @@ class MCPServerTask:
 
             client_kwargs: dict = {
                 "follow_redirects": True,
-                "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
+                # Streamable HTTP keeps the response open while a tool runs.
+                # The MCP SDK's default 300-second read timeout closes that
+                # response even when this server allows a longer tool call.
+                # Keep connect/write/pool limits while letting the outer
+                # Hermes tool timeout bound the operation.
+                "timeout": httpx.Timeout(float(connect_timeout), read=None),
                 "verify": ssl_verify,
                 "event_hooks": {"response": [_strip_auth_on_cross_origin_redirect]},
             }
@@ -3586,7 +3591,9 @@ class MCPServerTask:
                 )
             _http_kwargs: dict = {
                 "headers": headers,
-                "timeout": float(connect_timeout),
+                # Keep a long-running tool's response stream open. The
+                # surrounding Hermes tool timeout still bounds the call.
+                "timeout": sdk_httpx().Timeout(float(connect_timeout), read=None),
                 "verify": ssl_verify,
             }
             if _oauth_auth is not None:
