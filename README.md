@@ -100,6 +100,13 @@ If attestation says "Verification succeeded" and the last line prints `True`, yo
 
 For more context, see the upstream Astral reports: [astral-sh/uv#13553](https://github.com/astral-sh/uv/issues/13553), [astral-sh/uv#15011](https://github.com/astral-sh/uv/issues/15011), [astral-sh/uv#10079](https://github.com/astral-sh/uv/issues/10079).
 
+#### Long-running Streamable HTTP MCP calls
+
+Streamable HTTP keeps a response open while an MCP tool runs. Hermes keeps that
+response open for the configured MCP tool timeout; the connect timeout still
+limits the initial handshake. Set the server's `timeout` high enough for the
+tool's expected work instead of relying on the SDK's 300-second read default.
+
 #### NeMo Relay import collisions
 
 The optional `observability/nemo_relay` plugin must not be added directly to
