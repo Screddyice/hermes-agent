@@ -1607,8 +1607,31 @@ def current_profile_key() -> str:
 
 
 def _load_nemo_relay() -> Any:
-    """Load the binding only when a producer or consumer needs Relay."""
-    return importlib.import_module("nemo_relay")
+    """Load and validate the binding only when Relay is needed.
+
+    The optional plugin uses the same ``nemo_relay`` import name as the native
+    binding.  A plugin directory accidentally placed directly on
+    ``PYTHONPATH`` can therefore shadow the native module and only fail when a
+    conversation first opens a scope.  Validate the small lifecycle contract at
+    import time so the host registry can select its existing fail-open no-op
+    runtime instead of logging a late ``AttributeError`` for every turn.
+    """
+    relay = importlib.import_module("nemo_relay")
+    missing: list[str] = []
+    scope = getattr(relay, "scope", None)
+    for name in ("push", "pop", "event"):
+        if not callable(getattr(scope, name, None)):
+            missing.append(f"scope.{name}")
+    if not hasattr(relay, "ScopeType"):
+        missing.append("ScopeType")
+    if not callable(getattr(relay, "get_scope_stack", None)):
+        missing.append("get_scope_stack")
+    if missing:
+        raise ImportError(
+            "nemo_relay binding is missing the required lifecycle API: "
+            + ", ".join(missing)
+        )
+    return relay
 
 
 def _session_id(event: dict[str, Any]) -> str:
