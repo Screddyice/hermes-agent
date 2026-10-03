@@ -100,6 +100,16 @@ If attestation says "Verification succeeded" and the last line prints `True`, yo
 
 For more context, see the upstream Astral reports: [astral-sh/uv#13553](https://github.com/astral-sh/uv/issues/13553), [astral-sh/uv#15011](https://github.com/astral-sh/uv/issues/15011), [astral-sh/uv#10079](https://github.com/astral-sh/uv/issues/10079).
 
+#### NeMo Relay import collisions
+
+The optional `observability/nemo_relay` plugin must not be added directly to
+`PYTHONPATH`. Its package name is the same as the native `nemo-relay` binding,
+so that path can shadow the binding and break conversation startup. Hermes
+validates the binding lifecycle API at startup and falls back to its no-op
+runtime when the native wheel is unavailable or shadowed. Remove the plugin
+directory from `PYTHONPATH` and install the `nemo-relay` extra when Relay
+execution is required.
+
 ---
 
 ## Getting Started
